@@ -36,19 +36,19 @@ Below are the three diagrams for connecting the infrared receiver, infrared tran
    - Connect the IR LED to the ESP32 `GPIO 4`.
    - Use a **2N3904 transistor** to drive the IR LED without the need for a resistor.
 
-<img src="images/Ir Transmitter.png" alt="layout" style="width:100%;" />
+<img src="images/Ir Transmitter.png" alt="layout" style="width:30%;" />
 
 2. **IR Receiver:**
    - Connect the IR receiver to `GPIO 15`.
    - Use a **2.2uF capacitor** to stabilize the signal.
 
-<img src="images/Ir Receiver.png" alt="layout" style="width:100%;" />
+<img src="images/Ir Receiver.png" alt="layout" style="width:30%;" />
 
 3. **DHT11/22 Temperature Sensor:**
    - Connect the data pin of the DHT11 sensor to `GPIO 16`.
    - Use a 1kΩ pull-up resistor on the data pin.
 
-<img src="images/Temperature Sensor.png" alt="layout" style="width:100%;" />
+<img src="images/Temperature Sensor.png" alt="layout" style="width:20%;" />
 
 
 
@@ -133,8 +133,14 @@ Enter the following HomeKit code: 112-23-344.
 After successfully pairing, you will be able to control your air conditioner via the Home app.
 
 ## Homekit
-<img src="images/HomeKit1.png" alt="layout" style="width:100%;"/>
-<img src="images/HomeKit2.png" alt="layout" style="width:100%;"/>
+
+<div style="display: flex; justify-content: space-between;">
+    <img src="images/HomeKit1.PNG" alt="layout" style="width:28%;"/>
+    <img src="images/HomeKit2.PNG" alt="layout" style="width:28%;"/>
+</div>
+
+## Case
+<img src="images/Case.JPG" alt="layout" style="width:28%;"/>
 
 ## Contributing
 Contributions are welcome! Please open an issue or submit a pull request for any improvements or bug fixes.

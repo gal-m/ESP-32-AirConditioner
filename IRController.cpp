@@ -68,6 +68,7 @@ void IRController::handleIR() {
     } else {
       Serial.println("Ignored invalid or unknown protocol: " + detectedProtocol);
     }
+    Serial.println("@@@@");
     irrecv.resume();
   }
 }
@@ -75,6 +76,10 @@ void IRController::handleIR() {
 void IRController::sendThermostatCommand(bool power, int mode, int temp) {
   stdAc::state_t newState = lastState;
   newState.power = power;
+
+  if (newState.degrees != temp) {
+    newState.power = 1;
+  }
   newState.degrees = temp;
 
   switch (mode) {
@@ -150,7 +155,11 @@ void IRController::updateHomeKitFromIR() {
     targetTemp->setVal(lastState.degrees);
   }
 
+  Serial.println("power: ");
+  Serial.println(lastState.power);
+
   if (lastState.power || (targetState->getVal() != static_cast<int>(lastState.mode))) {
+
     switch (lastState.mode) {
       case stdAc::opmode_t::kAuto:  // Auto Mode
         targetState->setVal(3);
@@ -206,6 +215,8 @@ void IRController::updateHomeKitFromIR() {
   }
 }
 
+
+
 void IRController::saveProtocol(const char *protocol) {
   preferences.begin("IRController", false);
   preferences.putString("protocol", protocol);
@@ -248,6 +259,7 @@ void IRController::saveIdentifiedProtocols() {
     }
   }
 
+ Serial.println("Saving Identified Protocols: " + protocolsString); 
   // Save the serialized string to preferences
   preferences.putString("identifiedProtocols", protocolsString);
   preferences.end();
@@ -259,6 +271,8 @@ void IRController::loadIdentifiedProtocols() {
   // Get the serialized protocols string
   String protocolsString = preferences.getString("identifiedProtocols", "");
   preferences.end();
+
+   Serial.println("Loaded Identified Protocols: " + protocolsString);
 
   identifiedProtocols.clear();  // Clear any existing protocols
 
@@ -356,7 +370,7 @@ void IRController::startDryingBeforeShutdown() {
 
 void IRController::completeShutdown() {
   stdAc::state_t newState = lastState;
+  fanSpeed->setVal(25);
   newState.power = 0;
   sendCommand(newState);
 }
-

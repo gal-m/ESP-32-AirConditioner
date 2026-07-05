@@ -56,7 +56,8 @@ void setup() {
   fanAccessory = new FanAccessory(&irController);
 
   if (irController.isDryingBeforeShutdownEnabled()) {
-    dryingAccessory = new DryingShutdownAccessory(&irController);
+    dryingAccessory = new DryingShutdownAccessory(&irController, irController.getDryingDelayInSeconds());
+
   }
 }
 

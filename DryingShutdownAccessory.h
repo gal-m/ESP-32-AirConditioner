@@ -14,13 +14,13 @@ private:
   SpanCharacteristic *valveType;
   SpanCharacteristic *setDuration;
   SpanCharacteristic *remainingDuration;
-
+  int dryingDelay;
 public:
   void loop();
   boolean update();
   SpanCharacteristic *inUse;
   SpanCharacteristic *active;
-  DryingShutdownAccessory(IRController *irCtrl);
+  DryingShutdownAccessory(IRController *irCtrl, int dryingDelay);
 };
 
 #endif

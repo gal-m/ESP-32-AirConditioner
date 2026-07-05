@@ -3,14 +3,14 @@
 
 
 
-DryingShutdownAccessory::DryingShutdownAccessory(IRController *irCtrl, int dryingDelay)
-  : irController(irCtrl), dryingDelay(dryingDelay) {
+DryingShutdownAccessory::DryingShutdownAccessory(IRController *irCtrl)
+  : irController(irCtrl) {
 
   inUse = new Characteristic::InUse(0);
   active = new Characteristic::Active(0);
   valveType = new Characteristic::ValveType(0);
   enabled = new Characteristic::IsConfigured(1);
-  setDuration = new Characteristic::SetDuration(dryingDelay);
+  setDuration = new Characteristic::SetDuration(10);
   remainingDuration = new Characteristic::RemainingDuration(0);
   name = new Characteristic::ConfiguredName("Drying Shutdown");
 }
@@ -21,7 +21,7 @@ boolean DryingShutdownAccessory::update() {
 
     if (active->getNewVal()) {
       inUse->setVal(1);
-      // setDuration->setVal(irController->getDryingDelayInSeconds());
+      setDuration->setVal(irController->getDryingDelayInSeconds());
       remainingDuration->setVal(setDuration->getVal());
       irController->startDryingBeforeShutdown();
 

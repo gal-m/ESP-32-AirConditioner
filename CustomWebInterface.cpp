@@ -4,7 +4,6 @@
 WebServer webServer(80);
 
 void setupWebInterface(IRController& irController) {
-  irController.loadIdentifiedProtocols();
   webServer.begin();
 
   // Root endpoint serving the form

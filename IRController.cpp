@@ -1,209 +1,305 @@
 #include "IRController.h"
 
+#include <algorithm>
+
+namespace {
+constexpr int kMinTargetTemperature = 16;
+constexpr int kMaxTargetTemperature = 31;
+constexpr int kDefaultTargetTemperature = 22;
+
+int clampInt(int value, int minValue, int maxValue) {
+  return std::max(minValue, std::min(value, maxValue));
+}
+
+float clampFloat(float value, float minValue, float maxValue) {
+  return std::max(minValue, std::min(value, maxValue));
+}
+
+template <typename T>
+void setCharacteristicIfChanged(SpanCharacteristic *characteristic, T value, bool notify = true) {
+  if (characteristic && characteristic->getVal<T>() != value) {
+    characteristic->setVal(value, notify);
+  }
+}
+
+stdAc::fanspeed_t fanSpeedFromHomeKit(int fanSpeed) {
+  if (fanSpeed <= 0) {
+    return stdAc::fanspeed_t::kAuto;
+  }
+  if (fanSpeed <= 25) {
+    return stdAc::fanspeed_t::kMin;
+  }
+  if (fanSpeed <= 50) {
+    return stdAc::fanspeed_t::kMedium;
+  }
+  if (fanSpeed <= 75) {
+    return stdAc::fanspeed_t::kHigh;
+  }
+  return stdAc::fanspeed_t::kMax;
+}
+
+int fanSpeedToHomeKit(stdAc::fanspeed_t fanSpeed) {
+  switch (fanSpeed) {
+    case stdAc::fanspeed_t::kAuto:
+      return 0;
+    case stdAc::fanspeed_t::kMin:
+    case stdAc::fanspeed_t::kLow:
+      return 25;
+    case stdAc::fanspeed_t::kMedium:
+      return 50;
+    case stdAc::fanspeed_t::kHigh:
+    case stdAc::fanspeed_t::kMediumHigh:
+      return 75;
+    case stdAc::fanspeed_t::kMax:
+      return 100;
+    default:
+      return 0;
+  }
+}
+
+int targetStateToHomeKit(const stdAc::state_t &state) {
+  if (!state.power || state.mode == stdAc::opmode_t::kOff) {
+    return 0;
+  }
+
+  switch (state.mode) {
+    case stdAc::opmode_t::kHeat:
+      return 1;
+    case stdAc::opmode_t::kCool:
+      return 2;
+    case stdAc::opmode_t::kAuto:
+      return 3;
+    default:
+      return 3;
+  }
+}
+
+int currentStateToHomeKit(const stdAc::state_t &state) {
+  if (!state.power || state.mode == stdAc::opmode_t::kOff) {
+    return 0;
+  }
+
+  switch (state.mode) {
+    case stdAc::opmode_t::kHeat:
+      return 1;
+    case stdAc::opmode_t::kCool:
+      return 2;
+    default:
+      return 0;
+  }
+}
+
+bool isSwingEnabled(const stdAc::state_t &state) {
+  return state.swingv != stdAc::swingv_t::kOff || state.swingh != stdAc::swingh_t::kOff;
+}
+}  // namespace
+
 IRController::IRController(uint16_t sendPin, uint16_t recvPin, uint16_t captureBufferSize, uint8_t timeout, bool debug)
   : irsend(sendPin), irrecv(recvPin, captureBufferSize, timeout, debug), acController(sendPin) {
+  IRac::initState(&lastState);
+  IRac::initState(&pendingState);
 }
 
 void IRController::beginSend() {
   irsend.begin();
-  loadLastState();
   loadDryingSettings();
   loadIdentifiedProtocols();
+  loadLastState();
 }
 
 void IRController::beginReceive() {
   irrecv.enableIRIn();
 }
 
-void IRController::setThermostatCharacteristics(SpanCharacteristic *targetState, SpanCharacteristic *targetTemp) {
+void IRController::setThermostatCharacteristics(SpanCharacteristic *targetState, SpanCharacteristic *targetTemp,
+                                                SpanCharacteristic *currentState) {
   this->targetState = targetState;
   this->targetTemp = targetTemp;
+  this->currentState = currentState;
+  updateHomeKitFromIR();
 }
 
-void IRController::setFanCharacteristics(SpanCharacteristic *fanSpeed, SpanCharacteristic *swingMode) {
+void IRController::setFanCharacteristics(SpanCharacteristic *active, SpanCharacteristic *fanSpeed,
+                                         SpanCharacteristic *swingMode, SpanCharacteristic *currentFanState) {
+  this->fanActive = active;
   this->fanSpeed = fanSpeed;
   this->swingMode = swingMode;
+  this->currentFanState = currentFanState;
+  updateHomeKitFromIR();
 }
 
 void IRController::handleIR() {
   decode_results results;
-  if (irrecv.decode(&results)) {
-    stdAc::state_t currentState;
-    String savedProtocol = getProtocol();
 
-    // Detect the current protocol
-    String detectedProtocol = typeToString(results.decode_type);
-    Serial.println("Received signal from: " + detectedProtocol);
-
-
-    // Ignore "UNKNOWN" protocols
-    if (detectedProtocol != "UNKNOWN" && !detectedProtocol.isEmpty()) {
-      if (std::find(identifiedProtocols.begin(), identifiedProtocols.end(), detectedProtocol) == identifiedProtocols.end()) {
-        // Add detected protocol to identified protocols list if not already present
-        identifiedProtocols.push_back(detectedProtocol);
-        saveIdentifiedProtocols();  // Save protocols after adding a new one
-      }
-
-      if (savedProtocol.isEmpty()) {
-        // If no protocol is saved, check if the detected protocol is valid and supported by IRac
-        if (IRac::isProtocolSupported(results.decode_type)) {
-          // Save the first valid and supported detected protocol
-          saveProtocol(detectedProtocol.c_str());
-          Serial.println("First valid and supported protocol detected and saved: " + detectedProtocol);
-        } else {
-          Serial.println("Detected protocol is not supported by IRac. Ignoring.");
-        }
-      } else {
-        if (detectedProtocol == savedProtocol) {
-          Serial.println("Using saved protocol: " + savedProtocol);
-          if (IRAcUtils::decodeToState(&results, &currentState, &lastState)) {
-            lastState = currentState;
-            saveLastState();  // Save the updated lastState
-            updateHomeKitFromIR();
-          }
-        } else {
-          Serial.println("Detected protocol does not match the saved protocol. Ignoring.");
-        }
-      }
-    } else {
-      Serial.println("Ignored invalid or unknown protocol: " + detectedProtocol);
-    }
-    irrecv.resume();
-  }
-}
-
-void IRController::sendThermostatCommand(bool power, int mode, int temp) {
-  stdAc::state_t newState = lastState;
-  newState.power = power;
-  newState.degrees = temp;
-
-  switch (mode) {
-    // case 0:  // Auto
-    //   newState.mode = static_cast<stdAc::opmode_t>(0);
-    //   break;
-    case 1:  // Heating
-      newState.mode = stdAc::opmode_t::kHeat;
-      break;
-    case 2:  // Cooling
-      newState.mode = stdAc::opmode_t::kCool;
-      break;
-    case 3:  // Fan
-      newState.mode = stdAc::opmode_t::kFan;
-      break;
-    default:
-      Serial.println("Invalid mode. Defaulting to Auto.");
-      // newState.mode = static_cast<stdAc::opmode_t>(0);
-      break;
-  }
-  sendCommand(newState);
-}
-
-void IRController::sendFanCommand(int fanSpeed, bool swing) {
-  stdAc::state_t newState = lastState;
-  int mappedFanSpeed = (fanSpeed == 0) ? 0 : (fanSpeed <= 33) ? 1
-                                           : (fanSpeed <= 66) ? 3
-                                                              : 5;
-  newState.fanspeed = static_cast<stdAc::fanspeed_t>(mappedFanSpeed);
-
-  stdAc::swingv_t swingv = stdAc::swingv_t::kAuto;
-  stdAc::swingh_t swingh = stdAc::swingh_t::kAuto;
-
-  if (swing) {
-    swingv = stdAc::swingv_t::kOff;
-    swingh = stdAc::swingh_t::kOff;
+  if (!irrecv.decode(&results)) {
+    return;
   }
 
-  newState.swingv = swingv;
-  newState.swingh = swingh;
-  sendCommand(newState);
-}
-
-void IRController::sendCommand(stdAc::state_t newState) {
   String savedProtocol = getProtocol();
+  String detectedProtocol = typeToString(results.decode_type);
+  Serial.println("Received signal from: " + detectedProtocol);
 
-  // Check if a protocol is saved before sending a command
-  if (savedProtocol.isEmpty()) {
-    Serial.println("No protocol saved. Cannot send command.");
-    return;  // Exit the function if no protocol is saved
+  if (detectedProtocol == "UNKNOWN" || detectedProtocol.isEmpty()) {
+    Serial.println("Ignored invalid or unknown protocol: " + detectedProtocol);
+    irrecv.resume();
+    return;
   }
 
-  irrecv.pause();
-  delay(10);
-
-  // Check if lastState is valid, if not, load the saved lastState
-  if (!lastStateValid) {
-    loadLastState();
+  if (!IRac::isProtocolSupported(results.decode_type)) {
+    Serial.println("Detected protocol is not supported by IRac. Ignoring.");
+    irrecv.resume();
+    return;
   }
-  if (acController.sendAc(newState, &lastState)) {
-    lastState = newState;
-    saveLastState();  // Save the updated lastState
+
+  if (std::find(identifiedProtocols.begin(), identifiedProtocols.end(), detectedProtocol) == identifiedProtocols.end()) {
+    identifiedProtocols.push_back(detectedProtocol);
+    saveIdentifiedProtocols();
+  }
+
+  if (!savedProtocol.isEmpty() && detectedProtocol != savedProtocol) {
+    Serial.println("Detected protocol does not match the saved protocol. Ignoring.");
+    irrecv.resume();
+    return;
+  }
+
+  stdAc::state_t decodedState;
+  const stdAc::state_t *previousState = lastStateValid ? &lastState : nullptr;
+  if (IRAcUtils::decodeToState(&results, &decodedState, previousState)) {
+    lastState = decodedState;
+    lastStateValid = true;
+    saveLastState();
+
+    if (savedProtocol.isEmpty()) {
+      saveProtocol(detectedProtocol.c_str());
+      Serial.println("First valid and supported protocol detected and saved: " + detectedProtocol);
+    }
+
+    updateHomeKitFromIR();
   } else {
-    Serial.println("Failed to send AC command.");
+    Serial.println("Detected protocol could not be converted to a common AC state.");
   }
-  delay(10);
+
   irrecv.resume();
 }
 
+bool IRController::sendThermostatCommand(bool power, int mode, int temp) {
+  stdAc::state_t newState;
+  if (!prepareStateForCommand(&newState)) {
+    return false;
+  }
+
+  newState.power = power;
+  newState.degrees = clampInt(temp, kMinTargetTemperature, kMaxTargetTemperature);
+
+  if (!power || mode == 0) {
+    newState.power = false;
+    newState.mode = stdAc::opmode_t::kOff;
+  } else {
+    switch (mode) {
+      case 1:
+        newState.mode = stdAc::opmode_t::kHeat;
+        break;
+      case 2:
+        newState.mode = stdAc::opmode_t::kCool;
+        break;
+      case 3:
+        newState.mode = stdAc::opmode_t::kAuto;
+        break;
+      default:
+        Serial.println("Invalid HomeKit thermostat mode.");
+        return false;
+    }
+  }
+
+  return queueCommand(newState);
+}
+
+bool IRController::sendFanCommand(int fanSpeed, bool swing, bool active) {
+  stdAc::state_t newState;
+  if (!prepareStateForCommand(&newState)) {
+    return false;
+  }
+
+  if (!active) {
+    newState.power = false;
+    newState.mode = stdAc::opmode_t::kOff;
+  } else {
+    newState.power = true;
+    if (newState.mode == stdAc::opmode_t::kOff) {
+      newState.mode = stdAc::opmode_t::kFan;
+    }
+  }
+
+  newState.fanspeed = fanSpeedFromHomeKit(fanSpeed);
+  newState.swingv = swing ? stdAc::swingv_t::kAuto : stdAc::swingv_t::kOff;
+  newState.swingh = swing ? stdAc::swingh_t::kAuto : stdAc::swingh_t::kOff;
+
+  return queueCommand(newState);
+}
+
+bool IRController::queueCommand(const stdAc::state_t &newState) {
+  std::lock_guard<std::mutex> lock(commandMutex);
+  pendingState = newState;
+  pendingCommand = true;
+  return true;
+}
+
+void IRController::processPendingCommand() {
+  stdAc::state_t commandState;
+
+  {
+    std::lock_guard<std::mutex> lock(commandMutex);
+    if (!pendingCommand) {
+      return;
+    }
+
+    commandState = pendingState;
+    pendingCommand = false;
+  }
+
+  executeCommand(commandState);
+}
+
+bool IRController::executeCommand(const stdAc::state_t &newState) {
+  if (newState.protocol == decode_type_t::UNKNOWN || !IRac::isProtocolSupported(newState.protocol)) {
+    Serial.println("No supported AC protocol/state saved. Cannot send command.");
+    return false;
+  }
+
+  stdAc::state_t previousState = lastState;
+  const stdAc::state_t *previousStatePtr = lastStateValid ? &previousState : nullptr;
+
+  irrecv.pause();
+  delay(5);
+  bool success = acController.sendAc(newState, previousStatePtr);
+  delay(5);
+  irrecv.resume();
+
+  if (!success) {
+    Serial.println("Failed to send AC command.");
+    return false;
+  }
+
+  lastState = newState;
+  lastStateValid = true;
+  saveLastState();
+  updateHomeKitFromIR();
+  return true;
+}
 
 void IRController::updateHomeKitFromIR() {
-  if (targetTemp->getVal() != lastState.degrees) {
-    targetTemp->setVal(lastState.degrees);
+  if (!lastStateValid) {
+    return;
   }
 
-  if (lastState.power || (targetState->getVal() != static_cast<int>(lastState.mode))) {
-    switch (lastState.mode) {
-      case stdAc::opmode_t::kAuto:  // Auto Mode
-        targetState->setVal(3);
-        break;
-      case stdAc::opmode_t::kHeat:  // Heating Mode
-        targetState->setVal(1);
-        break;
-      case stdAc::opmode_t::kCool:  // Cooling Mode
-        targetState->setVal(2);
-        break;
-        // case stdAc::opmode_t::kFan:  // Fan Mode
-        //   targetState->setVal(3);
-        //   break;
-
-      default:
-        Serial.println("HomeKit Unrecognized mode received.");
-        break;
-    }
-
-    int fanNewSpeed;
-    switch (static_cast<int>(lastState.fanspeed)) {
-      case 0:  // Auto
-        fanNewSpeed = 0;
-        break;
-      case 1:  // Low
-        fanNewSpeed = 25;
-        break;
-      case 3:  // Medium
-        fanNewSpeed = 50;
-        break;
-      case 5:  // High
-        fanNewSpeed = 100;
-        break;
-      default:
-        fanNewSpeed = 0;
-        break;
-    }
-    if (fanSpeed->getVal() != fanNewSpeed) {
-      fanSpeed->setVal(fanNewSpeed);
-    }
-
-    int newSwingMode = 1;
-    if (lastState.swingv != stdAc::swingv_t::kOff || lastState.swingh != stdAc::swingh_t::kOff) {
-      newSwingMode = 0;
-    }
-
-    if (swingMode->getVal() != newSwingMode) {
-      swingMode->setVal(newSwingMode);
-    }
-
-  } else {
-    targetState->setVal(0);
-  }
+  float safeTargetTemp = clampFloat(lastState.degrees, kMinTargetTemperature, kMaxTargetTemperature);
+  setCharacteristicIfChanged<float>(targetTemp, safeTargetTemp);
+  setCharacteristicIfChanged<int>(targetState, targetStateToHomeKit(lastState));
+  setCharacteristicIfChanged<int>(currentState, currentStateToHomeKit(lastState));
+  setCharacteristicIfChanged<int>(fanActive, lastState.power ? 1 : 0);
+  setCharacteristicIfChanged<int>(currentFanState, lastState.power ? 2 : 0);
+  setCharacteristicIfChanged<int>(fanSpeed, fanSpeedToHomeKit(lastState.fanspeed));
+  setCharacteristicIfChanged<int>(swingMode, isSwingEnabled(lastState) ? 1 : 0);
 }
 
 void IRController::saveProtocol(const char *protocol) {
@@ -223,46 +319,68 @@ std::vector<String> IRController::getIdentifiedProtocols() {
   return identifiedProtocols;
 }
 
-void IRController::setProtocol(const String &protocol) {
+bool IRController::setProtocol(const String &protocol) {
+  decode_type_t decodeType = strToDecodeType(protocol.c_str());
+
+  if (protocol.isEmpty() || decodeType == decode_type_t::UNKNOWN || !IRac::isProtocolSupported(decodeType)) {
+    Serial.println("Selected protocol is not supported by IRac.");
+    return false;
+  }
+
   saveProtocol(protocol.c_str());
+
+  if (!lastStateValid || lastState.protocol != decodeType) {
+    IRac::initState(&lastState);
+    lastState.protocol = decodeType;
+    lastState.degrees = targetTemp ? targetTemp->getVal<float>() : kDefaultTargetTemperature;
+    lastState.degrees = clampFloat(lastState.degrees, kMinTargetTemperature, kMaxTargetTemperature);
+    lastStateValid = true;
+    saveLastState();
+    updateHomeKitFromIR();
+  }
+
+  return true;
 }
 
 void IRController::deleteIdentifiedProtocols() {
   identifiedProtocols.clear();
+  {
+    std::lock_guard<std::mutex> lock(commandMutex);
+    pendingCommand = false;
+  }
+
   preferences.begin("IRController", false);
   preferences.remove("identifiedProtocols");
   preferences.remove("protocol");
   preferences.remove("lastState");
   preferences.end();
+
+  IRac::initState(&lastState);
+  lastStateValid = false;
 }
 
 void IRController::saveIdentifiedProtocols() {
   preferences.begin("IRController", false);
 
-  // Join the identifiedProtocols vector into a single string separated by commas
   String protocolsString;
   for (size_t i = 0; i < identifiedProtocols.size(); i++) {
     protocolsString += identifiedProtocols[i];
     if (i < identifiedProtocols.size() - 1) {
-      protocolsString += ",";  // Add comma delimiter between protocols
+      protocolsString += ",";
     }
   }
 
-  // Save the serialized string to preferences
   preferences.putString("identifiedProtocols", protocolsString);
   preferences.end();
 }
 
 void IRController::loadIdentifiedProtocols() {
-  preferences.begin("IRController", true);  // Open preferences in read-only mode
-
-  // Get the serialized protocols string
+  preferences.begin("IRController", true);
   String protocolsString = preferences.getString("identifiedProtocols", "");
   preferences.end();
 
-  identifiedProtocols.clear();  // Clear any existing protocols
+  identifiedProtocols.clear();
 
-  // Split the string into individual protocols based on commas
   if (protocolsString.length() > 0) {
     int start = 0;
     int end = protocolsString.indexOf(',');
@@ -273,7 +391,6 @@ void IRController::loadIdentifiedProtocols() {
       end = protocolsString.indexOf(',', start);
     }
 
-    // Add the last protocol after the last comma
     identifiedProtocols.push_back(protocolsString.substring(start));
   }
 }
@@ -282,17 +399,58 @@ void IRController::saveLastState() {
   preferences.begin("IRController", false);
   preferences.putBytes("lastState", &lastState, sizeof(lastState));
   preferences.end();
+  lastStateValid = true;
 }
 
 void IRController::loadLastState() {
   preferences.begin("IRController", true);
   size_t size = preferences.getBytes("lastState", &lastState, sizeof(lastState));
-  if (size == sizeof(lastState)) {
-    lastStateValid = true;
-  } else {
-    lastStateValid = false;
-  }
   preferences.end();
+
+  if (size == sizeof(lastState) &&
+      lastState.protocol != decode_type_t::UNKNOWN &&
+      IRac::isProtocolSupported(lastState.protocol)) {
+    lastStateValid = true;
+    return;
+  }
+
+  IRac::initState(&lastState);
+  lastStateValid = false;
+  initializeStateFromProtocol(getProtocol());
+}
+
+bool IRController::initializeStateFromProtocol(const String &protocol) {
+  decode_type_t decodeType = strToDecodeType(protocol.c_str());
+
+  if (protocol.isEmpty() || decodeType == decode_type_t::UNKNOWN || !IRac::isProtocolSupported(decodeType)) {
+    return false;
+  }
+
+  IRac::initState(&lastState);
+  lastState.protocol = decodeType;
+  lastState.degrees = targetTemp ? targetTemp->getVal<float>() : kDefaultTargetTemperature;
+  lastState.degrees = clampFloat(lastState.degrees, kMinTargetTemperature, kMaxTargetTemperature);
+  lastStateValid = true;
+  return true;
+}
+
+bool IRController::prepareStateForCommand(stdAc::state_t *state) {
+  if (!state) {
+    return false;
+  }
+
+  if (!lastStateValid && !initializeStateFromProtocol(getProtocol())) {
+    Serial.println("No saved AC state/protocol. Capture a supported remote command first.");
+    return false;
+  }
+
+  if (lastState.protocol == decode_type_t::UNKNOWN || !IRac::isProtocolSupported(lastState.protocol)) {
+    Serial.println("Saved AC protocol is not supported.");
+    return false;
+  }
+
+  *state = lastState;
+  return true;
 }
 
 void IRController::saveDryingSettings() {
@@ -300,37 +458,22 @@ void IRController::saveDryingSettings() {
   preferences.putBool("dryingEnabled", dryingBeforeShutdownEnabled);
   preferences.putInt("dryingDelay", dryingDelayMinutes);
   preferences.end();
-  delay(1000);
-  ESP.restart();
 }
 
 void IRController::loadDryingSettings() {
   preferences.begin("IRController", true);
-
-  if (!preferences.isKey("dryingEnabled")) {
-    dryingBeforeShutdownEnabled = true;  // Default to enabled
-  } else {
-    dryingBeforeShutdownEnabled = preferences.getBool("dryingEnabled", true);
-  }
-
-  if (!preferences.isKey("dryingDelay")) {
-    dryingDelayMinutes = 40;  // Default delay of 40 minutes
-  } else {
-    dryingDelayMinutes = preferences.getInt("dryingDelay", 40);
-  }
-
+  dryingBeforeShutdownEnabled = preferences.getBool("dryingEnabled", true);
+  dryingDelayMinutes = preferences.getInt("dryingDelay", 40);
   preferences.end();
-  // saveDryingSettings();
+
+  dryingDelayMinutes = clampInt(dryingDelayMinutes, 1, 60);
 }
-
-
 
 void IRController::enableDryingBeforeShutdown(bool enable, int delayMinutes) {
   dryingBeforeShutdownEnabled = enable;
-  dryingDelayMinutes = delayMinutes;
+  dryingDelayMinutes = clampInt(delayMinutes, 1, 60);
   saveDryingSettings();
 }
-
 
 bool IRController::isDryingBeforeShutdownEnabled() const {
   return dryingBeforeShutdownEnabled;
@@ -344,19 +487,32 @@ int IRController::getDryingDelayInSeconds() const {
   return dryingDelayMinutes * 60;
 }
 
-void IRController::startDryingBeforeShutdown() {
+bool IRController::startDryingBeforeShutdown() {
+  stdAc::state_t newState;
+  if (!prepareStateForCommand(&newState)) {
+    return false;
+  }
+
   dryingInProgress = true;
-  stdAc::state_t newState = lastState;
-  targetState->setVal(0);
-  fanSpeed->setVal(100);
+  setCharacteristicIfChanged<int>(targetState, 0);
+  setCharacteristicIfChanged<int>(fanActive, 1);
+  setCharacteristicIfChanged<int>(currentFanState, 2);
+  setCharacteristicIfChanged<int>(fanSpeed, 100);
+
+  newState.power = true;
   newState.mode = stdAc::opmode_t::kFan;
-  newState.fanspeed = static_cast<stdAc::fanspeed_t>(5);
-  sendCommand(newState);
+  newState.fanspeed = stdAc::fanspeed_t::kMax;
+  return queueCommand(newState);
 }
 
-void IRController::completeShutdown() {
-  stdAc::state_t newState = lastState;
-  newState.power = 0;
-  sendCommand(newState);
-}
+bool IRController::completeShutdown() {
+  stdAc::state_t newState;
+  if (!prepareStateForCommand(&newState)) {
+    return false;
+  }
 
+  dryingInProgress = false;
+  newState.power = false;
+  newState.mode = stdAc::opmode_t::kOff;
+  return queueCommand(newState);
+}

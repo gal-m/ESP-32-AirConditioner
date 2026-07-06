@@ -11,7 +11,6 @@ private:
   SpanCharacteristic *swingMode;
   SpanCharacteristic *currentFanState;
   SpanCharacteristic *fanRotationSpeed;
-  SpanCharacteristic *rotationDirection;
 
 public:
   FanAccessory(IRController *irCtrl);

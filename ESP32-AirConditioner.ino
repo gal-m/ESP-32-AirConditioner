@@ -32,14 +32,12 @@ void setup() {
   homeSpan.setPortNum(1201);  // change port number for HomeSpan so we can use port 80 for the Web Server
   // homeSpan.enableOTA();       // enable OTA updates
   homeSpan.setWifiCallback(setWebInterface);
-  homeSpan.begin(Category::Bridges, "AC_Bridge");
-
-  // Set a custom HomeKit pairing code
   homeSpan.setPairingCode("11223344");
+  homeSpan.enableAutoStartAP();
+  homeSpan.begin(Category::Bridges, "AC_Bridge");
 
   // homeSpan.enableWebLog(10, "pool.ntp.org", "UTC+3");
   // homeSpan.setApTimeout(300);
-  homeSpan.enableAutoStartAP();
 
 
   new SpanAccessory();
@@ -58,11 +56,20 @@ void setup() {
   if (irController.isDryingBeforeShutdownEnabled()) {
     dryingAccessory = new DryingShutdownAccessory(&irController);
   }
+
+  homeSpan.autoPoll();
 }
 
 void loop() {
-  homeSpan.poll();
+  irController.processPendingCommand();
+  if (thermostatAccessory) {
+    thermostatAccessory->poll();
+  }
+  if (dryingAccessory) {
+    dryingAccessory->poll();
+  }
   webServerLoop();
+  delay(2);
 }
 
 void setWebInterface() {

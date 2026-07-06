@@ -1,149 +1,147 @@
 # ESP32 Air Conditioner Controller
 
-This project provides an ESP32-based air conditioner controller that communicates via infrared signals. It features a web interface for managing the IR protocols and drying settings, and it integrates with Apple HomeKit for smart home automation.
+ESP32-S3 based air conditioner controller that learns a supported IR air-conditioner protocol, sends IR commands, exposes a local web interface, and integrates with Apple HomeKit through HomeSpan.
 
 ## Features
 
-- **IR Protocol Management:** Detect and manage infrared protocols for controlling the AC unit.
-- **Drying Before Shutdown:** A fan-only mode to dry the AC system before powering off.
-- **Apple HomeKit Integration:** Control the AC through HomeKit.
-- **Web Interface:** Change settings via a local web server.
-
+- IR protocol detection and selection
+- Apple HomeKit thermostat and fan controls
+- Local web interface for protocol and drying-shutdown settings
+- Optional fan-only drying period before shutdown
+- DHT temperature and humidity reporting
 
 ## Hardware
 
-Before building and flashing the controller, make sure you have the following:
+- ESP32-S3 development board
+- DHT11 temperature/humidity sensor by default
+- IR transmitter and IR receiver
+- 2N3904 NPN transistor for driving the IR LED
+- Current-limiting resistor for the IR LED circuit
+- 2.2 uF capacitor for IR receiver supply filtering
+- 1 kOhm pull-up resistor for the DHT data pin
 
-- ESP32-S3 Development Board
-- DHT11/22 Temperature Sensor
-- IR Transmitter and Receiver
-- 2N3904 NPN Transistor
-- 2.2uF Capacitor
-- 1kΩ resistor
-- Arduino IDE or PlatformIO
-- Apple HomeKit Setup
+## Pinout
 
+| Part | ESP32-S3 pin |
+| --- | --- |
+| IR LED transmitter | GPIO 4 |
+| IR receiver signal | GPIO 15 |
+| DHT data | GPIO 16 |
+| HomeSpan status RGB LED | GPIO 48 |
 
----
+Power all external modules from the ESP32 3.3 V and GND pins unless your specific module requires a different supported supply.
 
-## Building the Controller
+### Circuit Diagrams
 
-### Circuit Diagram
+1. IR Transmitter
 
-Below are the three diagrams for connecting the infrared receiver, infrared transmitter, and temperature sensor.
+   Connect the IR LED driver to `GPIO 4`. Use the transistor as a driver and include proper current limiting for the IR LED path.
 
-1. **IR Transmitter:**
-   - Connect the IR LED to the ESP32 `GPIO 4`.
-   - Use a **2N3904 transistor** to drive the IR LED without the need for a resistor.
+<img src="images/Ir Transmitter.png" alt="IR transmitter wiring" style="width:30%;" />
 
-<img src="images/Ir Transmitter.png" alt="layout" style="width:30%;" />
+2. IR Receiver
 
-2. **IR Receiver:**
-   - Connect the IR receiver to `GPIO 15`.
-   - Use a **2.2uF capacitor** to stabilize the signal.
+   Connect the IR receiver output to `GPIO 15`. Use the 2.2 uF capacitor across the receiver supply pins to reduce noise.
 
-<img src="images/Ir Receiver.png" alt="layout" style="width:30%;" />
+<img src="images/Ir Receiver.png" alt="IR receiver wiring" style="width:30%;" />
 
-3. **DHT11/22 Temperature Sensor:**
-   - Connect the data pin of the DHT11 sensor to `GPIO 16`.
-   - Use a 1kΩ pull-up resistor on the data pin.
+3. DHT Sensor
 
-<img src="images/Temperature Sensor.png" alt="layout" style="width:20%;" />
+   Connect the DHT data pin to `GPIO 16` and use a 1 kOhm pull-up resistor on the data line.
 
+<img src="images/Temperature Sensor.png" alt="DHT sensor wiring" style="width:20%;" />
 
+## Build and Flash
 
-### Ensure all components are powered by the 3.3V and GND pins of the ESP32.
+### PlatformIO
 
+This repository includes `platformio.ini` for an ESP32-S3-WROOM-1 N16R8 target.
 
----
+```bash
+pio run
+pio run --target upload
+```
 
-## Flashing the ESP32
+The PlatformIO environment pins HomeSpan to `1.9.1` because the current stable PlatformIO ESP32 Arduino package is based on Arduino-ESP32 2.x. Newer HomeSpan 2.x releases require Arduino-ESP32 3.3.0 or later.
 
-1. **Clone the Repository:**
-   ```bash
-   git clone <repository-url>
-   cd <repository-folder>
+### Arduino IDE
 
-Install Dependencies: Install the necessary libraries (IRremoteESP8266, HomeSpan, etc.) in your Arduino IDE or PlatformIO.
+Install these libraries:
 
-Upload the Code:
+- HomeSpan
+- IRremoteESP8266
+- DHT sensor library by Adafruit
+- Adafruit Unified Sensor
 
-In Arduino IDE: Select the ESP32 board and the correct port, then click "Upload".
-In PlatformIO: Run the command pio run --target upload.
+For an ESP32-S3-WROOM-1 N16R8 module, use these Arduino IDE board settings:
 
----
+- Board: `ESP32S3 Dev Module`
+- Flash Size: `16MB (128Mb)`
+- PSRAM: `OPI PSRAM`
+- Partition Scheme: any 16 MB or huge-app option with an app slot larger than 2 MB, such as `16M Flash (3MB APP/9MB FATFS)` or `Huge APP (3MB No OTA/1MB SPIFFS)`
+- USB CDC On Boot: match your board's USB/serial wiring
 
-## Configuring the Wireless Network
-After flashing the code to the controller, follow these steps to configure the controller for your home wireless network:
+The default partition often gives only about 1.3 MB for the app, which is too small for HomeSpan plus IRremoteESP8266. The sketch defaults to `DHT11`; to use DHT22, change `DHT_TYPE` in `ThermostatAccessory.cpp` or define `DHT_TYPE=DHT22` in your build flags.
 
-Open the Wi-Fi settings on your phone or computer.
-Connect to the network named ESP32 Ac Controller with the password 123456789.
-Once connected, the settings interface will automatically open in your browser.
-On this page, select your home Wi-Fi network and enter the password.
-After saving the settings, the controller will reboot and connect to your home network.
-Now, the controller is connected to your home network, and you can access the web interface or pair it with Apple HomeKit.
+## Wi-Fi Setup
 
----
+After flashing, if no Wi-Fi credentials are stored, HomeSpan starts an access point:
 
-## IR Protocol Setup and Synchronization
-After setting up the network, follow these steps to configure the controller to recognize the remote control's protocol:
+- SSID: `ESP32 Ac Controller`
+- Password: `123456789`
 
-Point the Air Conditioner Remote at the Controller:
+Connect to that network from your phone or computer, enter your home Wi-Fi credentials in the captive portal, and let the ESP32 restart.
 
-Ensure the ESP32 controller is powered on and connected to your home network.
-Point the remote control of your air conditioner directly at the controller.
-Press the On and Off buttons on the remote control. The controller will detect and save the protocol of your remote.
-Maintaining Synchronization with the Remote:
+## IR Protocol Setup
 
-To keep the controller synchronized with the remote control, place the ESP32 controller within the vicinity of the air conditioner.
-When controlling the air conditioner with the remote, the controller will pick up the changes and automatically synchronize the HomeKit app with the state of the AC unit.
-This ensures that changes made with the remote control are reflected accurately in your HomeKit app, allowing seamless control via both the remote and your smart home system.
+The controller must learn a supported air-conditioner state before it can send commands.
 
----
+1. Power the ESP32 and connect it to Wi-Fi.
+2. Point the original AC remote at the IR receiver.
+3. Press a normal AC command such as power, cool, heat, or temperature.
+4. The controller stores the first supported protocol and decoded AC state.
+5. Open the web interface and select the detected protocol if more than one was captured.
 
-## Web Interface Setup
-Once the code is flashed and the controller is connected to your home network, the ESP32 hosts a local web server for managing the AC controller.
+If no supported decoded state has been saved, HomeKit commands are rejected instead of sending invalid IR data.
 
-Accessing the Web Interface
-Connect to the same Wi-Fi network as the ESP32.
-Open your browser and go to 'http://homespan-ac-controller.local'
-Web Interface Features:
-- Select IR Protocol: Choose the detected protocol for your AC.
-- Drying Settings: Set a delay for drying before shutdown.
-- Delete Protocols: Clear all detected protocols.
+## Web Interface
 
----
+Open this address from the same network:
 
-## Adding the Controller to the Home Application
-To add the controller to the Home app, follow these steps:
+```text
+http://homespan-ac-controller.local
+```
 
-- Using the HomeKit QR Code:
+The web interface can:
 
-Open the Home app on your Apple device.
-Tap + Add Accessory, then scan the QR code provided 
+- Select the saved IR protocol
+- Delete detected protocols and saved AC state
+- Enable or disable drying-before-shutdown
+- Set the drying delay from 1 to 60 minutes
 
-<img src="images/qrcode.png" alt="layout" style="width:20%;"/>
+Changing the drying accessory setting restarts the ESP32 after the HTTP response is sent because the HomeKit accessory database changes.
 
+## Apple Home
 
-- Using the Setup Code:
-  
-Alternatively, if you don’t have the QR code handy, you can manually enter the setup code.
-Tap + Add Accessory and select Don't Have a Code or Can't Scan?.
-Enter the following HomeKit code: 112-23-344.
-After successfully pairing, you will be able to control your air conditioner via the Home app.
+Pair in the Home app with the QR code or manual setup code.
 
-## Homekit
+<img src="images/qrcode.png" alt="HomeKit QR code" style="width:20%;"/>
+
+Manual setup code:
+
+```text
+112-23-344
+```
 
 <div style="display: flex; justify-content: space-between;">
-    <img src="images/HomeKit1.PNG" alt="layout" style="width:28%;"/>
-    <img src="images/HomeKit2.PNG" alt="layout" style="width:28%;"/>
+    <img src="images/HomeKit1.PNG" alt="Home app screen 1" style="width:28%;"/>
+    <img src="images/HomeKit2.PNG" alt="Home app screen 2" style="width:28%;"/>
 </div>
 
 ## Case
-<img src="images/Case.JPG" alt="layout" style="width:28%;"/>
 
-## Contributing
-Contributions are welcome! Please open an issue or submit a pull request for any improvements or bug fixes.
+<img src="images/Case.JPG" alt="3D printed case" style="width:28%;"/>
 
 ## License
+
 This project is licensed under the MIT License. See the LICENSE file for details.

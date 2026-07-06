@@ -1,8 +1,10 @@
 
 #include "ThermostatAccessory.h"
 #include <DHT.h>
-#define DHT_PIN 16  // DHT11 sensor pin
+#define DHT_PIN 16
+#ifndef DHT_TYPE
 #define DHT_TYPE DHT11
+#endif
 
 ThermostatAccessory::ThermostatAccessory(IRController *irCtrl)
   : Service::Thermostat(), irController(irCtrl) {
@@ -14,12 +16,12 @@ ThermostatAccessory::ThermostatAccessory(IRController *irCtrl)
   targetTemp = new Characteristic::TargetTemperature(22, true);
   currentHumidity = new Characteristic::CurrentRelativeHumidity(0);
   targetState = new Characteristic::TargetHeatingCoolingState(0, true);
-  currentState = new Characteristic::CurrentHeatingCoolingState(0, true);
+  currentState = new Characteristic::CurrentHeatingCoolingState(0);
   targetTemp->setRange(16, 31, 1);
-  irController->setThermostatCharacteristics(targetState, targetTemp);
+  irController->setThermostatCharacteristics(targetState, targetTemp, currentState);
 }
 
-void ThermostatAccessory::loop() {
+void ThermostatAccessory::poll() {
   unsigned long currentTime = millis();
 
   if (currentTime - lastReadTime >= readInterval) {
@@ -46,6 +48,5 @@ boolean ThermostatAccessory::update() {
   bool power = targetState->getNewVal() != 0;
   int mode = targetState->getNewVal();
   int temp = targetTemp->getNewVal();
-  irController->sendThermostatCommand(power, mode, temp);
-  return true;
+  return irController->sendThermostatCommand(power, mode, temp);
 }

@@ -16,7 +16,7 @@ private:
   SpanCharacteristic *remainingDuration;
 
 public:
-  void loop();
+  void poll();
   boolean update();
   SpanCharacteristic *inUse;
   SpanCharacteristic *active;

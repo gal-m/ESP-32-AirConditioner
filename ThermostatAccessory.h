@@ -21,7 +21,7 @@ private:
   const unsigned long readInterval = 2000;
 
 public:
-  void loop();
+  void poll();
   boolean update();
   void readTemperatureAndHumidity();
   ThermostatAccessory(IRController *irCtrl);

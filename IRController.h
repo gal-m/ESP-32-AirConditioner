@@ -2,6 +2,7 @@
 #define IRCONTROLLER_H_
 
 
+#include <mutex>
 #include <vector>
 #include <IRac.h>
 #include <IRrecv.h>
@@ -16,26 +17,29 @@ public:
   void handleIR();
   void beginSend();
   void beginReceive();
+  void processPendingCommand();
   String getProtocol();
-  void completeShutdown();
+  bool completeShutdown();
   void saveDryingSettings();
   void loadDryingSettings();
   void saveIdentifiedProtocols();
   void loadIdentifiedProtocols();
   void deleteIdentifiedProtocols();
-  void startDryingBeforeShutdown();
+  bool startDryingBeforeShutdown();
   int getDryingDelayMinutes() const;
   int getDryingDelayInSeconds() const;
   std::vector<String> identifiedProtocols;
   void saveProtocol(const char *protocol);
-  void setProtocol(const String &protocol);
+  bool setProtocol(const String &protocol);
   bool isDryingBeforeShutdownEnabled() const;
   std::vector<String> getIdentifiedProtocols();
-  void sendFanCommand(int fanSpeed, bool swing);
-  void sendThermostatCommand(bool power, int mode, int temp);
+  bool sendFanCommand(int fanSpeed, bool swing, bool active);
+  bool sendThermostatCommand(bool power, int mode, int temp);
   void enableDryingBeforeShutdown(bool enable, int delayMinutes);
-  void setFanCharacteristics(SpanCharacteristic *fanSpeed, SpanCharacteristic *swingMode);
-  void setThermostatCharacteristics(SpanCharacteristic *targetState, SpanCharacteristic *targetTemp);
+  void setFanCharacteristics(SpanCharacteristic *active, SpanCharacteristic *fanSpeed,
+                             SpanCharacteristic *swingMode, SpanCharacteristic *currentFanState);
+  void setThermostatCharacteristics(SpanCharacteristic *targetState, SpanCharacteristic *targetTemp,
+                                    SpanCharacteristic *currentState);
   IRController(uint16_t sendPin, uint16_t recvPin, uint16_t captureBufferSize, uint8_t timeout, bool debug);
 
 private:
@@ -44,18 +48,27 @@ private:
   IRac acController;
   void saveLastState();
   void loadLastState();
+  bool initializeStateFromProtocol(const String &protocol);
+  bool prepareStateForCommand(stdAc::state_t *state);
+  bool queueCommand(const stdAc::state_t &newState);
+  bool executeCommand(const stdAc::state_t &newState);
   Preferences preferences;
   stdAc::state_t lastState;
+  stdAc::state_t pendingState;
   void updateHomeKitFromIR();
   bool lastStateValid = false;
+  bool pendingCommand = false;
   int dryingDelayMinutes = 40;
   bool dryingInProgress = false;
-  SpanCharacteristic *fanSpeed;
-  SpanCharacteristic *swingMode;
-  SpanCharacteristic *targetTemp;
-  SpanCharacteristic *targetState;
+  std::mutex commandMutex;
+  SpanCharacteristic *fanActive = nullptr;
+  SpanCharacteristic *fanSpeed = nullptr;
+  SpanCharacteristic *swingMode = nullptr;
+  SpanCharacteristic *targetTemp = nullptr;
+  SpanCharacteristic *targetState = nullptr;
+  SpanCharacteristic *currentState = nullptr;
+  SpanCharacteristic *currentFanState = nullptr;
   bool dryingBeforeShutdownEnabled = true;
-  void sendCommand(stdAc::state_t newState);
 };
 
 #endif  // IRCONTROLLER_H_

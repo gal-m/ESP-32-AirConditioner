@@ -2,9 +2,31 @@
 
 // Create WebServer on port 80
 WebServer webServer(80);
+bool webServerStarted = false;
+bool restartScheduled = false;
+unsigned long restartAt = 0;
+
+namespace {
+int clampDryingDelay(int delayMinutes) {
+  if (delayMinutes < 1) {
+    return 1;
+  }
+  if (delayMinutes > 60) {
+    return 60;
+  }
+  return delayMinutes;
+}
+
+void scheduleRestart(unsigned long delayMs) {
+  restartScheduled = true;
+  restartAt = millis() + delayMs;
+}
+}  // namespace
 
 void setupWebInterface(IRController& irController) {
-  webServer.begin();
+  if (webServerStarted) {
+    return;
+  }
 
   // Root endpoint serving the form
   webServer.on("/", HTTP_GET, [&irController]() {
@@ -42,13 +64,17 @@ void setupWebInterface(IRController& irController) {
     content += "<label for='protocol'>Select Protocol</label>";
     content += "<select id='protocol' name='protocol'>";
 
-    // Mark the saved protocol as selected
-    for (const String& proto : protocols) {
-      content += "<option value='" + proto + "'";
-      if (proto == savedProtocol) {
-        content += " selected";  // Mark the saved protocol as selected
+    if (protocols.empty()) {
+      content += "<option value=''>No supported protocol detected</option>";
+    } else {
+      // Mark the saved protocol as selected
+      for (const String& proto : protocols) {
+        content += "<option value='" + proto + "'";
+        if (proto == savedProtocol) {
+          content += " selected";
+        }
+        content += ">" + proto + "</option>";
       }
-      content += ">" + proto + "</option>";
     }
 
     content += "</select>";
@@ -86,8 +112,10 @@ void setupWebInterface(IRController& irController) {
   webServer.on("/setProtocol", HTTP_POST, [&irController]() {
     if (webServer.hasArg("protocol")) {
       String protocol = webServer.arg("protocol");
-      irController.setProtocol(protocol);
-      irController.saveProtocol(protocol.c_str());
+      if (!irController.setProtocol(protocol)) {
+        webServer.send(400, "text/html", "<html><body><h1>Unsupported protocol.</h1><br><a href='/'>Go back</a></body></html>");
+        return;
+      }
     }
     webServer.send(200, "text/html", "<html><body><h1>Protocol set successfully.</h1><br><a href='/'>Go back</a></body></html>");
   });
@@ -101,13 +129,24 @@ void setupWebInterface(IRController& irController) {
   // Endpoint for updating drying settings
   webServer.on("/setDryingMode", HTTP_POST, [&irController]() {
     bool dryingEnabled = webServer.hasArg("dryingEnabled");
-    int dryingDelay = webServer.hasArg("dryingDelay") ? webServer.arg("dryingDelay").toInt() : 0;
+    int dryingDelay = webServer.hasArg("dryingDelay") ? webServer.arg("dryingDelay").toInt() : irController.getDryingDelayMinutes();
+    dryingDelay = clampDryingDelay(dryingDelay);
     irController.enableDryingBeforeShutdown(dryingEnabled, dryingDelay);
-    irController.saveDryingSettings();
-    webServer.send(200, "text/html", "<html><body><h1>Drying settings updated.</h1><br><a href='/'>Go back</a></body></html>");
+    webServer.send(200, "text/html", "<html><body><h1>Drying settings updated. Restarting...</h1></body></html>");
+    scheduleRestart(1000);
   });
+
+  webServer.begin();
+  webServerStarted = true;
 }
 
 void webServerLoop() {
-  webServer.handleClient();
+  if (webServerStarted) {
+    webServer.handleClient();
+  }
+
+  if (restartScheduled && (long)(millis() - restartAt) >= 0) {
+    delay(50);
+    ESP.restart();
+  }
 }

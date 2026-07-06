@@ -20,13 +20,19 @@ boolean DryingShutdownAccessory::update() {
   if (active->updated()) {
 
     if (active->getNewVal()) {
+      if (!irController->startDryingBeforeShutdown()) {
+        return false;
+      }
+
       inUse->setVal(1);
       setDuration->setVal(irController->getDryingDelayInSeconds());
       remainingDuration->setVal(setDuration->getVal());
-      irController->startDryingBeforeShutdown();
 
     } else {
-      irController->completeShutdown();
+      if (!irController->completeShutdown()) {
+        return false;
+      }
+
       inUse->setVal(0);
       remainingDuration->setVal(0);
     }
@@ -34,16 +40,17 @@ boolean DryingShutdownAccessory::update() {
   return true;
 }
 
-void DryingShutdownAccessory::loop() {
+void DryingShutdownAccessory::poll() {
 
   if (active->getVal()) {
     int remainingTime = setDuration->getVal() - active->timeVal() / 1000;
 
     if (remainingTime <= 0) {
-      irController->completeShutdown();
-      active->setVal(0);
-      inUse->setVal(0);
-      remainingDuration->setVal(0);
+      if (irController->completeShutdown()) {
+        active->setVal(0);
+        inUse->setVal(0);
+        remainingDuration->setVal(0);
+      }
     } else if (remainingTime < remainingDuration->getVal()) {
       remainingDuration->setVal(remainingTime, false);
     }
